@@ -1,0 +1,292 @@
+
+import speech_recognition as sr
+import pyttsx3
+import requests
+import json
+import re
+import os
+import subprocess
+import webbrowser
+import time
+
+# === CONFIGURATION ===
+# Using OpenAI's free GPT-3.5-turbo API via https://api.openai.com (requires free OpenAI account and API key)
+API_KEY = "sk-your-openai-free-api-key"  # Replace with your free OpenAI API key from https://platform.openai.com/account/api-keys
+API_URL = "https://api.openai.com/v1/chat/completions"
+
+HEADERS = {
+    "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json"
+}
+
+# === INITIALIZATION ===
+engine = pyttsx3.init()
+engine.setProperty("rate", 170)
+voices = engine.getProperty('voices')
+# Try to set a more "AI" or British male voice for Jarvis
+for v in voices:
+    if "Brian" in v.name or "Jarvis" in v.name or "David" in v.name or "en-gb" in v.id.lower():
+        engine.setProperty('voice', v.id)
+        break
+
+recognizer = sr.Recognizer()
+microphone = sr.Microphone()
+
+def speak(text):
+    print(f"Jarvis says: {text}")
+    engine.say(text)
+    engine.runAndWait()
+
+def listen(prompt=None, timeout=7):
+    if prompt:
+        speak(prompt)
+    with microphone as source:
+        recognizer.adjust_for_ambient_noise(source, duration=0.7)
+        print("🎤 Listening...")
+        try:
+            audio = recognizer.listen(source, phrase_time_limit=timeout)
+        except Exception as e:
+            print(f"Microphone error: {e}")
+            return None
+    try:
+        print("🔍 Recognizing...")
+        text = recognizer.recognize_google(audio)
+        print(f"You said: {text}")
+        return text
+    except sr.UnknownValueError:
+        print("❓ Could not understand audio.")
+        return None
+    except sr.RequestError as e:
+        print(f"⚠️ Recognition error; {e}")
+        return None
+
+def clean_response(text):
+    text = re.sub(r'\\n|\n|\r', ' ', text)
+    text = re.sub(r'[*_#>\[\]{}|]', '', text)
+    text = re.sub(r'\s{2,}', ' ', text)
+    return text.strip()
+
+def chat_with_gpt(prompt):
+    try:
+        data = {
+            "model": "gpt-3.5-turbo",
+            "messages": [
+                {"role": "system", "content": "You are Jarvis, a helpful AI assistant with a British accent and a calm, confident tone."},
+                {"role": "user", "content": prompt}
+            ]
+        }
+        print("🧠 Sending request to OpenAI...")
+        response = requests.post(API_URL, headers=HEADERS, json=data, timeout=15)
+        if response.status_code == 200:
+            result = response.json()
+            if "choices" in result and result["choices"]:
+                raw_answer = result["choices"][0]["message"]["content"]
+                print(f"🧠 AI Raw Response: {raw_answer}")
+                return clean_response(raw_answer)
+            else:
+                print("❌ API response missing 'choices'.")
+                return "Sorry, I couldn't get a valid response from the AI."
+        else:
+            print(f"❌ API error: {response.status_code} {response.text}")
+            return "Sorry, I couldn't get a response from the AI."
+    except Exception as e:
+        print(f"❌ Exception contacting AI: {e}")
+        return "There was a problem connecting to the AI."
+
+# === SYSTEM COMMANDS ===
+def shutdown():
+    speak("Shutting down the system.")
+    os.system("shutdown /s /t 1")
+
+def open_app(paths, app_name):
+    for path in paths:
+        if os.path.exists(path):
+            subprocess.Popen([path])
+            speak(f"Opening {app_name}.")
+            return True
+    speak(f"{app_name} not found on your system.")
+    return False
+
+def open_chrome():
+    open_app([
+        "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+        "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"
+    ], "Chrome browser")
+
+def open_notepad():
+    subprocess.Popen("notepad.exe")
+    speak("Opening Notepad.")
+
+def open_wordpad():
+    subprocess.Popen("write.exe")
+    speak("Opening WordPad.")
+
+def open_msword():
+    open_app([
+        "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE",
+        "C:\\Program Files (x86)\\Microsoft Office\\root\\Office16\\WINWORD.EXE"
+    ], "Microsoft Word")
+
+def open_powerpoint():
+    open_app([
+        "C:\\Program Files\\Microsoft Office\\root\\Office16\\POWERPNT.EXE",
+        "C:\\Program Files (x86)\\Microsoft Office\\root\\Office16\\POWERPNT.EXE"
+    ], "PowerPoint")
+
+def open_vlc():
+    open_app([
+        "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe",
+        "C:\\Program Files (x86)\\VideoLAN\\VLC\\vlc.exe"
+    ], "VLC Media Player")
+
+def open_youtube():
+    speak("Opening YouTube.")
+    webbrowser.open("https://www.youtube.com")
+
+def play_youtube_song(song_name):
+    if not song_name:
+        speak("Please tell me the song name to play on YouTube.")
+        return
+    speak(f"Playing {song_name} on YouTube.")
+    url = f"https://www.youtube.com/results?search_query={song_name.replace(' ', '+')}"
+    webbrowser.open(url)
+
+def open_folder(folder_name):
+    folder_path = os.path.join("C:\\Users\\70ayu\\", folder_name)
+    if os.path.exists(folder_path):
+        os.startfile(folder_path)
+        speak(f"Opening folder {folder_name}")
+    else:
+        speak("Sorry, I couldn't find that folder.")
+
+def open_file(file_name):
+    if os.path.exists(file_name):
+        os.startfile(file_name)
+        speak(f"Opening file {file_name}")
+    else:
+        desktop_path = os.path.join("C:\\Users\\70ayu\\Desktop", file_name)
+        if os.path.exists(desktop_path):
+            os.startfile(desktop_path)
+            speak(f"Opening file {file_name} from Desktop")
+        else:
+            speak("File not found.")
+
+def search_google(query):
+    speak(f"Searching Google for {query}")
+    url = f"https://www.google.com/search?q={query}"
+    webbrowser.open(url)
+
+def list_tasks():
+    tasks = [
+        "Open Chrome browser",
+        "Open Notepad or WordPad",
+        "Open Microsoft Word or PowerPoint",
+        "Open VLC Media Player",
+        "Open YouTube or play a song on YouTube",
+        "Open a folder or file",
+        "Search Google",
+        "Shutdown the system",
+        "Ask any question"
+    ]
+    speak("Here are some things I can do for you:")
+    for task in tasks:
+        speak(task)
+
+def handle_command(cmd):
+    if any(word in cmd for word in ["exit", "quit", "bye", "stop"]):
+        speak("Goodbye! Have a great day.")
+        return False
+
+    elif "shutdown" in cmd:
+        shutdown()
+        return False
+
+    elif "open chrome" in cmd:
+        open_chrome()
+
+    elif "open notepad" in cmd:
+        open_notepad()
+
+    elif "open wordpad" in cmd:
+        open_wordpad()
+
+    elif "open microsoft word" in cmd or "open ms word" in cmd:
+        open_msword()
+
+    elif "open powerpoint" in cmd:
+        open_powerpoint()
+
+    elif "open vlc" in cmd or "open vlc media player" in cmd:
+        open_vlc()
+
+    # "open youtube" and ask for song name
+    elif "open youtube" in cmd and "play" not in cmd:
+        speak("Which song would you like to play on YouTube?")
+        song_name = listen("Please say the song name.")
+        if song_name:
+            play_youtube_song(song_name)
+        else:
+            speak("Sorry, I didn't catch the song name.")
+
+    elif ("youtube" in cmd and "play" in cmd) or ("play" in cmd and "youtube" in cmd):
+        # Example: "play despacito on youtube" or "youtube play despacito"
+        song = cmd
+        # Try to extract song name
+        if "play" in song:
+            song = song.split("play", 1)[1]
+        if "on youtube" in song:
+            song = song.split("on youtube")[0]
+        song = song.replace("youtube", "").replace("play", "").strip()
+        play_youtube_song(song)
+
+    elif "open folder" in cmd:
+        folder = cmd.replace("open folder", "").strip()
+        if folder:
+            open_folder(folder)
+        else:
+            speak("Please tell me the folder name to open.")
+
+    elif "open file" in cmd:
+        file_name = cmd.replace("open file", "").strip()
+        if file_name:
+            open_file(file_name)
+        else:
+            speak("Please tell me the file name to open.")
+
+    elif "search for" in cmd or "google" in cmd:
+        query = cmd.replace("search for", "").replace("google", "").strip()
+        if query:
+            search_google(query)
+        else:
+            speak("Please tell me what to search for.")
+
+    elif "what can you do" in cmd or "your tasks" in cmd or "help" in cmd:
+        list_tasks()
+
+    else:
+        # If command not recognized, send to AI chat
+        response = chat_with_gpt(cmd)
+        speak(response)
+    return True
+
+def main():
+    speak("Hello, I am Jarvis. Say 'Jarvis' to wake me up.")
+    while True:
+        print("⏳ Waiting for wake word 'Jarvis'...")
+        wake_word = listen(timeout=5)
+        if wake_word and "jarvis" in wake_word.lower():
+            speak("Yes, how can I assist you?")
+            command = listen()
+            if command:
+                cmd = command.lower()
+                print(f"Command received: {cmd}")
+                if not handle_command(cmd):
+                    break
+            else:
+                speak("Sorry, I didn't catch that.")
+        else:
+            print("Wake word not detected. Listening again...")
+        time.sleep(0.5)
+
+if __name__ == "__main__":
+    main()
