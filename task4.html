@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Simple Movie Recommender with Posters</title>
+<style>
+  :root{
+    --bg:#0f1220;--card:#171a2b;--muted:#8b8fa3;--text:#e7e9f5;--accent:#6ee7ff;--accent2:#a78bfa;--good:#34d399;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:linear-gradient(180deg,#0f1220 0%,#0b0e1a 100%);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial,sans-serif}
+  header{padding:24px 16px;text-align:center}
+  header h1{margin:0;font-size:clamp(20px,3vw,28px)}
+  header p{margin:.4rem 0 0;color:var(--muted)}
+  .container{max-width:1100px;margin:0 auto;padding:16px;display:grid;grid-template-columns:280px 1fr;gap:16px}
+  .panel{background:var(--card);border:1px solid #262a43;border-radius:16px;padding:14px}
+  .panel h2{margin:.2rem 0 .8rem;font-size:18px}
+  .search{display:flex;gap:8px}
+  input[type="text"], select, button{
+    background:#111425;border:1px solid #2a2f4b;color:var(--text);border-radius:10px;padding:10px 12px;font-size:14px;outline:none;
+  }
+  button{cursor:pointer}
+  button.primary{background:linear-gradient(90deg,var(--accent2),var(--accent));border:none;font-weight:600;color:#0a0c17}
+  button.ghost{background:#13162a;border:1px solid #293056}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+  .card{
+    border:1px solid #232848;background:#12162a;border-radius:14px;padding:10px;display:flex;flex-direction:column;gap:6px;transition:transform .2s ease, box-shadow .2s ease;
+  }
+  .card:hover{transform:translateY(-2px);box-shadow:0 6px 24px rgba(0,0,0,.35)}
+  .card img{
+    width:100%;
+    height:280px;
+    object-fit:cover;
+    border-radius:10px;
+    margin-bottom:6px;
+  }
+  .badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#1b2040;color:var(--muted);font-size:12px;margin-right:6px;margin-top:2px}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .actions{display:flex;gap:8px;flex-wrap:wrap}
+  .footer-note{color:var(--muted);font-size:12px;margin-top:8px}
+  .recommendations .item{
+    border:1px solid #263057;background:#0f142a;border-radius:12px;padding:10px;margin-bottom:10px
+  }
+  .recommendations .item img{
+    width:100%;
+    height:180px;
+    object-fit:cover;
+    border-radius:10px;
+    margin-bottom:6px;
+  }
+  .score{font-variant-numeric:tabular-nums;color:var(--good);font-weight:700}
+  .empty{color:var(--muted);text-align:center;padding:20px;border:1px dashed #2a3050;border-radius:12px}
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin:.25rem 0 .5rem}
+  .chip{padding:6px 10px;border-radius:999px;border:1px solid #2c3258;background:#121735;color:#c9cdf2;font-size:12px;cursor:default}
+  .muted{color:var(--muted)}
+  .pill-select{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+  .pill-select label{display:flex;gap:8px;align-items:center;background:#121735;border:1px solid #2b3160;border-radius:999px;padding:8px 10px;cursor:pointer}
+  .inline{display:inline-flex;gap:8px;align-items:center}
+  .divider{height:1px;background:#242948;margin:10px 0}
+  @media (max-width: 860px){.container{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎬 Simple Movie Recommender (with Posters)</h1>
+  <p>Select a few movies you like. We’ll recommend similar titles instantly — all in your browser.</p>
+</header>
+
+<div class="container">
+  <!-- Sidebar Controls -->
+  <aside class="panel">
+    <h2>1) Find & Select Movies You Like</h2>
+    <div class="search">
+      <input id="search" type="text" placeholder="Search by title, genre, keyword…" />
+      <button id="clearFilters" class="ghost">Clear</button>
+    </div>
+    <div class="divider"></div>
+    <div class="chips" id="genreChips"></div>
+    <div class="divider"></div>
+    <div class="actions">
+      <button id="selectTop" class="ghost">Select visible</button>
+      <button id="clearSelected" class="ghost">Clear selected</button>
+    </div>
+    <p class="footer-note">Tip: Pick 3–5 favorites for best results.</p>
+    <div class="divider"></div>
+    <h2>2) Cold-Start (Optional)</h2>
+    <p class="muted">If you don’t know any movies below, choose preferred genres:</p>
+    <div class="pill-select" id="genrePills"></div>
+    <div class="actions" style="margin-top:8px">
+      <button id="setFromGenres" class="ghost">Use genres as profile</button>
+    </div>
+    <div class="divider"></div>
+    <h2>3) Get Recommendations</h2>
+    <div class="actions">
+      <button id="recommendBtn" class="primary">Get Recommendations</button>
+      <select id="kSelect">
+        <option value="5">Top 5</option>
+        <option value="10" selected>Top 10</option>
+        <option value="15">Top 15</option>
+      </select>
+    </div>
+  </aside>
+
+  <!-- Catalog + Recommendations -->
+  <main class="panel">
+    <h2 style="display:flex;justify-content:space-between;align-items:center">
+      Movie Catalog <span class="muted" id="visibleCount"></span>
+    </h2>
+    <div id="catalog" class="grid"></div>
+    <div class="divider"></div>
+    <section class="recommendations">
+      <h2>Recommendations</h2>
+      <div id="recs"></div>
+    </section>
+  </main>
+</div>
+
+<script>
+/* ----------------- Movies with Poster URLs ----------------- */
+const MOVIES = [
+  {id:1, title:"Inception", year:2010, genres:["Sci-Fi","Action","Thriller"], keywords:["dream","heist","subconscious"], img:"https://images.unsplash.com/photo-1524985069026-dd778a71c7b4?auto=format&fit=crop&w=600&q=80"},
+  {id:2, title:"Interstellar", year:2014, genres:["Sci-Fi","Adventure","Drama"], keywords:["space","wormhole","time dilation"], img:"https://images.unsplash.com/photo-1478720568477-152d9b164e26?auto=format&fit=crop&w=600&q=80"},
+  {id:3, title:"The Dark Knight", year:2008, genres:["Action","Crime","Drama"], keywords:["joker","gotham","chaos"], img:"https://images.unsplash.com/photo-1517602302552-471fe67acf66?auto=format&fit=crop&w=600&q=80"},
+  {id:4, title:"The Matrix", year:1999, genres:["Sci-Fi","Action"], keywords:["simulation","kung fu","rebellion"], img:"https://images.unsplash.com/photo-1505682634904-d7c8d95cdc50?auto=format&fit=crop&w=600&q=80"},
+  {id:5, title:"Arrival", year:2016, genres:["Sci-Fi","Drama","Mystery"], keywords:["aliens","language","time"], img:"https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=600&q=80"},
+];
+
+/* ------- TF-IDF utilities (same as before) ------- */
+const tokenize = s=> s.toLowerCase().replace(/[^a-z0-9+'’\- ]/g," ").split(/\s+/).filter(Boolean);
+function buildDocuments(movies){return movies.map(m=>({id:m.id, title:m.title, terms:[...m.genres.map(g=>g.toLowerCase()), ...m.keywords.flatMap(tokenize)]}));}
+function computeIdf(docs){const N=docs.length;const df=new Map();docs.forEach(d=>{new Set(d.terms).forEach(t=>df.set(t,(df.get(t)||0)+1))});const idf=new Map();df.forEach((v,t)=>idf.set(t,Math.log((N+1)/(v+1))+1));return idf;}
+function tf(terms){const m=new Map();terms.forEach(t=>m.set(t,(m.get(t)||0)+1));return m;}
+function tfidfVector(terms,idf){const tfMap=tf(terms);const vec=new Map();let norm=0;tfMap.forEach((f,t)=>{const w=(1+Math.log(f))*(idf.get(t)||0);vec.set(t,w);norm+=w*w});return{vec,norm:Math.sqrt(norm)};}
+function cosine(a,b){if(a.norm===0||b.norm===0)return 0;let dot=0;const[short,long]=a.vec.size<b.vec.size?[a,b]:[b,a];short.vec.forEach((wa,t)=>{const wb=long.vec.get(t);if(wb)dot+=wa*wb});return dot/(a.norm*b.norm);}
+const DOCS=buildDocuments(MOVIES);const IDF=computeIdf(DOCS);const MOVIE_VECS=new Map();DOCS.forEach(d=>MOVIE_VECS.set(d.id,tfidfVector(d.terms,IDF)));
+function userProfileFromMovies(ids){const terms=[];ids.forEach(id=>{const m=MOVIES.find(x=>x.id===id);if(m)terms.push(...m.genres.map(g=>g.toLowerCase()),...tokenize(m.keywords.join(" ")))});return tfidfVector(terms,IDF);}
+function profileFromGenres(genres){return tfidfVector(genres.map(g=>g.toLowerCase()),IDF);}
+function recommend(profile,excludeIds=new Set(),k=10){return MOVIES.filter(m=>!excludeIds.has(m.id)).map(m=>({movie:m,score:cosine(profile,MOVIE_VECS.get(m.id))})).sort((a,b)=>b.score-a.score).slice(0,k);}
+
+/* ------- Render Catalog with Posters ------- */
+const catalogEl=document.getElementById("catalog"),recsEl=document.getElementById("recs");
+function cardHTML(m){return`
+  <div class="card" data-id="${m.id}">
+    <img src="${m.img}" alt="${m.title} poster"/>
+    <div class="row" style="justify-content:space-between">
+      <strong>${m.title}</strong><span class="badge">${m.year}</span>
+    </div>
+    <div class="row">${m.genres.map(g=>`<span class="badge">${g}</span>`).join("")}</div>
+    <div class="muted" style="font-size:12px">${m.keywords.map(k=>"#"+k).join(" ")}</div>
+    <div class="row" style="justify-content:space-between;margin-top:6px">
+      <label class="inline"><input type="checkbox" data-id="${m.id}"/><span>Add to likes</span></label>
+    </div>
+  </div>`;}
+function renderCatalog(){catalogEl.innerHTML=MOVIES.map(cardHTML).join("");}
+renderCatalog();
+
+/* ------- Show Recommendations with Posters ------- */
+function showRecommendations(profile,excludeIds,k){const results=recommend(profile,excludeIds,k);recsEl.innerHTML=results.map(r=>`
+  <div class="item">
+    <img src="${r.movie.img}" alt="${r.movie.title} poster"/>
+    <div class="row" style="justify-content:space-between">
+      <div><strong>${r.movie.title}</strong><span class="badge">${r.movie.year}</span></div>
+      <div class="score">${r.score.toFixed(3)}</div>
+    </div>
+  </div>`).join("");}
+
+/* ------- Button Actions ------- */
+document.getElementById("recommendBtn").addEventListener("click",()=>{
+  const ids=[...document.querySelectorAll('input[type="checkbox"][data-id]:checked')].map(cb=>+cb.dataset.id);
+  if(ids.length===0){recsEl.innerHTML=`<div class="empty">Select some movies first.</div>`;return;}
+  const profile=userProfileFromMovies(new Set(ids));
+  showRecommendations(profile,new Set(ids),+document.getElementById("kSelect").value);
+});
+</script>
+</body>
+</html>
