@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Face Detection & Recognition — HTML + face-api.js</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; margin: 18px; background:#f7f7fb; color:#111; }
+    h1 { font-size:20px; margin-bottom:8px; }
+    .row { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-start; }
+    .card { background:#fff; border-radius:10px; box-shadow:0 6px 18px rgba(20,20,60,0.06); padding:12px; }
+    #video, #inputImage, canvas { border-radius:8px; max-width:100%; display:block; }
+    #controls { display:flex; gap:8px; margin-top:8px; align-items:center; flex-wrap:wrap; }
+    label, input, button, select { font-size:14px; }
+    button { padding:8px 12px; border-radius:8px; border:none; cursor:pointer; background:#2b6cb0; color:white; }
+    button.secondary { background:#6b7280; }
+    .small { font-size:13px; color:#555; }
+    #log { margin-top:8px; font-size:13px; color:#333; }
+    .list { margin-top:8px; font-size:13px; }
+    .face-item { display:flex; gap:8px; align-items:center; margin-bottom:6px; }
+    .face-thumb { width:42px; height:42px; border-radius:6px; object-fit:cover; border:1px solid #eee; }
+  </style>
+</head>
+<body>
+  <h1>Face Detection & Recognition (client-side)</h1>
+  <div class="row">
+    <div class="card" style="flex:1 1 420px;">
+      <strong>Live camera</strong>
+      <video id="video" autoplay muted playsinline width="420" height="315"></video>
+      <div id="controls">
+        <button id="startCam">Start Camera</button>
+        <button id="stopCam" class="secondary">Stop Camera</button>
+        <button id="detectLive" class="secondary">Detect & Recognize</button>
+        <input id="labelInput" placeholder="Label to register (e.g. Alice)" />
+        <button id="enrollLive">Enroll Face (from camera)</button>
+      </div>
+      <div id="log" class="small">Models not loaded yet.</div>
+    </div>
+
+    <div class="card" style="flex:0 0 320px;">
+      <strong>Image / Upload</strong>
+      <input id="imageUpload" type="file" accept="image/*" />
+      <div style="margin-top:8px;">
+        <img id="inputImage" alt="" style="display:none;" />
+        <canvas id="overlayCanvas" style="display:none;"></canvas>
+      </div>
+      <div style="margin-top:8px;">
+        <button id="detectImage" class="secondary">Detect & Recognize Image</button>
+        <button id="enrollImage">Enroll Face (from image)</button>
+      </div>
+      <div class="small list" id="knownList"></div>
+    </div>
+  </div>
+
+  <p class="small" style="margin-top:10px">
+    Implementation uses <code>face-api.js</code>. You must host pre-trained model files (weights) in a folder named <code>models/</code> at the same level as this HTML file.
+    Download the models from the face-api.js repo (tiny face detector, face landmark, face recognition models). Place files like <code>tiny_face_detector_model-weights_manifest.json</code>, <code>face_landmark_68_model-weights_manifest.json</code>, <code>face_recognition_model-weights_manifest.json</code> inside <code>models/</code>.
+  </p>
+
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+  <script>
+  (async () => {
+    const video = document.getElementById('video');
+    const startCamBtn = document.getElementById('startCam');
+    const stopCamBtn = document.getElementById('stopCam');
+    const detectLiveBtn = document.getElementById('detectLive');
+    const enrollLiveBtn = document.getElementById('enrollLive');
+    const labelInput = document.getElementById('labelInput');
+    const imageUpload = document.getElementById('imageUpload');
+    const inputImage = document.getElementById('inputImage');
+    const overlayCanvas = document.getElementById('overlayCanvas');
+    const detectImageBtn = document.getElementById('detectImage');
+    const enrollImageBtn = document.getElementById('enrollImage');
+    const logEl = document.getElementById('log');
+    const knownList = document.getElementById('knownList');
+
+    // where the models are expected to be found (relative to this HTML file)
+    const MODEL_URL = './models';
+
+    logEl.textContent = 'Loading models... (this may take a few seconds)';
+    try {
+      await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+      await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
+      logEl.textContent = 'Models loaded. Start camera or upload an image.';
+    } catch (e) {
+      logEl.textContent = 'Error loading models. Make sure "models/" exists and contains the face-api.js model files.';
+      console.error(e);
+    }
+
+    // utility: get descriptors from a single face box (image or video frame)
+    async function detectSingleFaceWithDescriptor(input) {
+      const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+      const result = await faceapi.detectSingleFace(input, options)
+        .withFaceLandmarks()
+        .withFaceDescriptor();
+      return result; // null if none
+    }
+
+    // localStorage persistence for labeled descriptors
+    const STORAGE_KEY = 'faceapi-labeled-descriptors-v1';
+
+    function saveLabeledDescriptors(labeledDescriptors) {
+      const serializable = labeledDescriptors.map(ld => ({
+        label: ld.label,
+        descriptors: ld.descriptors.map(d => Array.from(d))
+      }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(serializable));
+    }
+
+    function loadLabeledDescriptors() {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return [];
+      try {
+        const parsed = JSON.parse(raw);
+        return parsed.map(p => new faceapi.LabeledFaceDescriptors(
+          p.label,
+          p.descriptors.map(arr => new Float32Array(arr))
+        ));
+      } catch (e) {
+        console.warn('Failed to parse labeled descriptors', e);
+        return [];
+      }
+    }
+
+    function updateKnownListUI() {
+      const list = loadLabeledDescriptors();
+      if (list.length === 0) {
+        knownList.innerHTML = '<em>No enrolled faces</em>';
+        return;
+      }
+      knownList.innerHTML = '';
+      list.forEach(ld => {
+        const div = document.createElement('div');
+        div.className = 'face-item';
+        const t = document.createElement('div');
+        t.textContent = ld.label + ' — ' + ld.descriptors.length + ' descriptor(s)';
+        const rem = document.createElement('button');
+        rem.textContent = 'Delete';
+        rem.className = 'secondary';
+        rem.style.marginLeft = 'auto';
+        rem.onclick = () => {
+          const all = loadLabeledDescriptors();
+          const filtered = all.filter(x => x.label !== ld.label);
+          saveLabeledDescriptors(filtered);
+          updateKnownListUI();
+        };
+        div.appendChild(t);
+        div.appendChild(rem);
+        knownList.appendChild(div);
+      });
+    }
+
+    updateKnownListUI();
+
+    // Start camera
+    let stream = null;
+    startCamBtn.addEventListener('click', async () => {
+      if (stream) return;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
+        video.srcObject = stream;
+        logEl.textContent = 'Camera started.';
+      } catch (e) {
+        logEl.textContent = 'Unable to access camera: ' + e.message;
+      }
+    });
+
+    stopCamBtn.addEventListener('click', () => {
+      if (!stream) return;
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+      video.srcObject = null;
+      logEl.textContent = 'Camera stopped.';
+    });
+
+    // Build FaceMatcher if descriptors exist
+    function buildFaceMatcher() {
+      const labels = loadLabeledDescriptors();
+      if (labels.length === 0) return null;
+      return new faceapi.FaceMatcher(labels, 0.6); // threshold
+    }
+
+    // Detect on live video and draw overlay
+    async function detectAndRecognizeVideoOnce() {
+      if (!stream) {
+        logEl.textContent = 'Camera not started.';
+        return;
+      }
+      const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+      const results = await faceapi.detectAllFaces(video, options)
+        .withFaceLandmarks()
+        .withFaceDescriptors();
+
+      // prepare overlay canvas
+      overlayCanvas.style.display = 'block';
+      overlayCanvas.width = video.videoWidth;
+      overlayCanvas.height = video.videoHeight;
+      overlayCanvas.style.width = video.style.width || video.width + 'px';
+      overlayCanvas.style.height = video.style.height || video.height + 'px';
+      const ctx = overlayCanvas.getContext('2d');
+      ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      ctx.strokeStyle = '#00ff88';
+      ctx.lineWidth = 2;
+      ctx.font = '18px Arial';
+      ctx.fillStyle = '#00ff88';
+
+      const matcher = buildFaceMatcher();
+
+      results.forEach(r => {
+        const { x, y, width, height } = r.detection.box;
+        ctx.strokeRect(x, y, width, height);
+        let text = 'unknown';
+        if (matcher) {
+          const best = matcher.findBestMatch(r.descriptor);
+          text = best.toString(); // "label (distance)" or "unknown"
+        }
+        ctx.fillText(text, x, y > 20 ? y - 6 : y + height + 18);
+      });
+
+      logEl.textContent = `Detected ${results.length} face(s) in the frame.`;
+    }
+
+    detectLiveBtn.addEventListener('click', async () => {
+      await detectAndRecognizeVideoOnce();
+    });
+
+    // Enroll from camera (capture a frame)
+    enrollLiveBtn.addEventListener('click', async () => {
+      const label = (labelInput.value || '').trim();
+      if (!label) {
+        logEl.textContent = 'Please enter a label before enrolling.';
+        return;
+      }
+      if (!stream) {
+        logEl.textContent = 'Camera not started.';
+        return;
+      }
+      logEl.textContent = 'Capturing face from camera...';
+      const detection = await detectSingleFaceWithDescriptor(video);
+      if (!detection) {
+        logEl.textContent = 'No face detected — try again with better lighting and frame the face.';
+        return;
+      }
+      const descriptor = detection.descriptor;
+      const existing = loadLabeledDescriptors();
+      const found = existing.find(x => x.label === label);
+      if (found) {
+        // append
+        found.descriptors.push(descriptor);
+        saveLabeledDescriptors(existing);
+      } else {
+        existing.push(new faceapi.LabeledFaceDescriptors(label, [descriptor]));
+        saveLabeledDescriptors(existing);
+      }
+      updateKnownListUI();
+      logEl.textContent = `Enrolled face for label "${label}".`;
+    });
+
+    // Handle image upload
+    imageUpload.addEventListener('change', async (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      inputImage.src = URL.createObjectURL(file);
+      inputImage.style.display = 'block';
+      overlayCanvas.style.display = 'none';
+      inputImage.onload = () => {
+        overlayCanvas.width = inputImage.naturalWidth;
+        overlayCanvas.height = inputImage.naturalHeight;
+        overlayCanvas.style.display = 'block';
+      };
+    });
+
+    // Detect & recognize in uploaded image
+    detectImageBtn.addEventListener('click', async () => {
+      if (!inputImage.src) {
+        logEl.textContent = 'No image loaded.';
+        return;
+      }
+      const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 512, scoreThreshold: 0.5 });
+      const results = await faceapi.detectAllFaces(inputImage, options)
+        .withFaceLandmarks()
+        .withFaceDescriptors();
+
+      overlayCanvas.width = inputImage.naturalWidth;
+      overlayCanvas.height = inputImage.naturalHeight;
+      const ctx = overlayCanvas.getContext('2d');
+      ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+      ctx.strokeStyle = '#ff6b6b';
+      ctx.lineWidth = 2;
+      ctx.font = '20px Arial';
+      ctx.fillStyle = '#ff6b6b';
+
+      const matcher = buildFaceMatcher();
+      results.forEach(r => {
+        const { x, y, width, height } = r.detection.box;
+        ctx.strokeRect(x, y, width, height);
+        let text = 'unknown';
+        if (matcher) {
+          const best = matcher.findBestMatch(r.descriptor);
+          text = best.toString();
+        }
+        ctx.fillText(text, x, y > 20 ? y - 6 : y + height + 20);
+      });
+
+      logEl.textContent = `Detected ${results.length} face(s) in image.`;
+    });
+
+    // Enroll from uploaded image (uses first detected face)
+    enrollImageBtn.addEventListener('click', async () => {
+      const label = (labelInput.value || '').trim();
+      if (!label) {
+        logEl.textContent = 'Please enter a label before enrolling.';
+        return;
+      }
+      if (!inputImage.src) {
+        logEl.textContent = 'No image loaded.';
+        return;
+      }
+      logEl.textContent = 'Detecting face in image for enrollment...';
+      const detection = await detectSingleFaceWithDescriptor(inputImage);
+      if (!detection) {
+        logEl.textContent = 'No face found in the image.';
+        return;
+      }
+      const descriptor = detection.descriptor;
+      const existing = loadLabeledDescriptors();
+      const found = existing.find(x => x.label === label);
+      if (found) {
+        found.descriptors.push(descriptor);
+        saveLabeledDescriptors(existing);
+      } else {
+        existing.push(new faceapi.LabeledFaceDescriptors(label, [descriptor]));
+        saveLabeledDescriptors(existing);
+      }
+      updateKnownListUI();
+      logEl.textContent = `Enrolled face for label "${label}" from image.`;
+    });
+
+    // quick auto-detect loop while camera running (optional) - toggled by holding detectLive continuously
+    // Not used automatically; user triggers detection manually.
+
+    // On load: ensure overlay canvas tucked under image/video sizes
+    window.addEventListener('resize', () => {
+      // No-op but left for future adjustments
+    });
+  })();
+  </script>
+</body>
+</html>
